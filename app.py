@@ -42,7 +42,7 @@ def load_server_data():
         return df, selected_file
     return None, None
 
-st.title("⚡ XÁC ĐỊNH VỊ TRÍ ĐỨT CÁP QUANG MAKE BY BANGNC13")
+st.title("⚡ XÁC ĐỊNH VỊ TRÍ ĐỨT CÁP  Make By BangNC13")
 st.caption("Fiber Optic Break Location Finder - FPT Telecom System")
 
 # 2. Tải Dữ Liệu Từ Server
