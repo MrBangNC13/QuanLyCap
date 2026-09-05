@@ -7,7 +7,7 @@ from streamlit_folium import st_folium
 # 1. Cấu hình trang
 st.set_page_config(page_title="Xác Định Vị Trí Đứt Cáp", layout="wide", initial_sidebar_state="expanded")
 
-# Khởi tạo session state lưu kết quả đứt cáp
+# Khởi tạo session state lưu kết quả
 if "break_result" not in st.session_state:
     st.session_state.break_result = None
 if "break_gps" not in st.session_state:
@@ -22,9 +22,8 @@ st.title("⚡ XÁC ĐỊNH VỊ TRÍ ĐỨT CÁP")
 st.caption("Fiber Optic Break Location Finder")
 
 # 2. Sidebar Lọc & Nhập Dữ Liệu
-st.sidebar.title("📂 Make by BangNC13")
+st.sidebar.title("📂 QUẢN LÝ DỮ LIỆU")
 
-# Thêm key cố định cho file_uploader
 uploaded_file = st.sidebar.file_uploader(
     "Tải lên file Danh-Sách-Đoạn-Cáp.xlsx", 
     type=["xlsx", "xls"], 
@@ -36,7 +35,7 @@ if uploaded_file:
     df = load_data(uploaded_file)
     df.columns = [str(col).strip() for col in df.columns]
     
-    # Tìm cột Tọa độ (hỗ trợ nhiều định dạng tên cột)
+    # Tìm cột Tọa độ
     lat_col1 = next((c for c in df.columns if 'lat' in c.lower() and '1' in c.lower()), None)
     lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or ('lon' in c.lower() and '1' in c.lower())), None)
     lat_col2 = next((c for c in df.columns if 'lat' in c.lower() and '2' in c.lower()), None)
@@ -133,7 +132,7 @@ if uploaded_file:
             st.session_state.break_result = b_res
             st.session_state.break_gps = b_gps
 
-    # Hiển thị kết quả từ session_state
+    # Hiển thị kết quả từ session_state ở Sidebar
     if st.session_state.break_result:
         res = st.session_state.break_result
         st.sidebar.error("📍 VỊ TRÍ ĐỨT CÁP")
@@ -147,7 +146,7 @@ if uploaded_file:
             st.sidebar.markdown(f"📍 **GPS:** `{gps[0]:.6f}, {gps[1]:.6f}`")
             st.sidebar.markdown(f"👉 [**Mở trên Google Maps**]({gmap_url})")
 
-    # 3. Hiển thị Bản đồ
+    # 3. Hiển thị Bản đồ (CHỈ HIỂN THỊ ĐOẠN CÁP BỊ ĐỨT)
     map_center = [21.0285, 105.8542]
     zoom_lvl = 12
 
@@ -161,34 +160,52 @@ if uploaded_file:
 
     m = folium.Map(location=map_center, zoom_start=zoom_lvl, tiles="OpenStreetMap")
 
-    for u, v in G.edges():
+    # CHỈ VẼ ĐOẠN CÁP VÀ 2 ĐẦU NÚT KHI ĐÃ CÓ KẾT QUẢ XÁC ĐỊNH VỊ TRÍ
+    if st.session_state.break_result:
+        u = st.session_state.break_result['from']
+        v = st.session_state.break_result['to']
+
         if u in node_coords and v in node_coords:
+            # Vẽ đường cáp kết nối giữa 2 điểm u và v
             folium.PolyLine(
                 locations=[node_coords[u], node_coords[v]],
                 color="blue",
-                weight=4,
-                opacity=0.7
+                weight=5,
+                opacity=0.8,
+                tooltip=f"Đoạn cáp: {st.session_state.break_result['cable']}"
             ).add_to(m)
 
-    for node_name, coord in node_coords.items():
-        folium.CircleMarker(
-            location=coord,
-            radius=5,
-            popup=node_name,
-            color="blue",
-            fill=True,
-            fill_color="white"
-        ).add_to(m)
+            # Vẽ điểm nút đầu (Point From)
+            folium.CircleMarker(
+                location=node_coords[u],
+                radius=6,
+                popup=f"Điểm KN: {u}",
+                tooltip=f"Điểm KN: {u}",
+                color="blue",
+                fill=True,
+                fill_color="white"
+            ).add_to(m)
 
-    if st.session_state.break_gps and st.session_state.break_result:
-        folium.Marker(
-            location=st.session_state.break_gps,
-            popup=f"CẢNH BÁO ĐỨT CÁP: {st.session_state.break_result['cable']}",
-            tooltip="Vị trí đứt cáp dự kiến",
-            icon=folium.Icon(color="red", icon="warning", prefix="fa")
-        ).add_to(m)
+            # Vẽ điểm nút cuối (Point To)
+            folium.CircleMarker(
+                location=node_coords[v],
+                radius=6,
+                popup=f"Điểm KN: {v}",
+                tooltip=f"Điểm KN: {v}",
+                color="blue",
+                fill=True,
+                fill_color="white"
+            ).add_to(m)
 
-    # Đặt key cố định cho st_folium để tránh reload ứng dụng khi bấm vào bản đồ
+        # Ghim vị trí đứt cáp màu đỏ
+        if st.session_state.break_gps:
+            folium.Marker(
+                location=st.session_state.break_gps,
+                popup=f"CẢNH BÁO ĐỨT CÁP: {st.session_state.break_result['cable']}",
+                tooltip="Vị trí đứt cáp dự kiến",
+                icon=folium.Icon(color="red", icon="warning", prefix="fa")
+            ).add_to(m)
+
     st_folium(m, width=1000, height=650, key="folium_map")
 
 else:
