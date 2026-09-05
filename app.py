@@ -2,75 +2,77 @@ import streamlit as st
 import pandas as pd
 import networkx as nx
 import folium
+import json
 from streamlit_folium import st_folium
 
 # 1. Cấu hình trang
 st.set_page_config(page_title="Xác Định Vị Trí Đứt Cáp", layout="wide", initial_sidebar_state="expanded")
 
-# Khởi tạo session state lưu kết quả
+# Session state lưu trữ kết quả
 if "break_result" not in st.session_state:
     st.session_state.break_result = None
 if "break_gps" not in st.session_state:
     st.session_state.break_gps = None
 
-# Hàm đọc file Excel có Cache
-@st.cache_data
-def load_data(file):
-    return pd.read_excel(file)
-
 st.title("⚡ XÁC ĐỊNH VỊ TRÍ ĐỨT CÁP")
 st.caption("Fiber Optic Break Location Finder")
 
 # 2. Sidebar Lọc & Nhập Dữ Liệu
-st.sidebar.title("📂 Make by BangNC13")
+st.sidebar.title("📂 QUẢN LÝ DỮ LIỆU")
 
-uploaded_file = st.sidebar.file_uploader(
-    "Tải lên file Danh-Sách-Đoạn-Cáp.xlsx", 
-    type=["xlsx", "xls"], 
-    key="excel_uploader"
-)
+# Cho phép chọn định dạng File đầu vào
+data_source = st.sidebar.radio("Chọn định dạng dữ liệu:", ["File Excel (.xlsx)", "File JSON (.json)"])
 
-if uploaded_file:
-    # Đọc dữ liệu qua hàm cache
-    df = load_data(uploaded_file)
-    df.columns = [str(col).strip() for col in df.columns]
-    
-    # Tìm cột Tọa độ
-    lat_col1 = next((c for c in df.columns if 'lat' in c.lower() and '1' in c.lower()), None)
-    lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or ('lon' in c.lower() and '1' in c.lower())), None)
-    lat_col2 = next((c for c in df.columns if 'lat' in c.lower() and '2' in c.lower()), None)
-    lon_col2 = next((c for c in df.columns if 'lng' in c.lower() or ('lon' in c.lower() and '2' in c.lower())), None)
+G = nx.Graph()
+node_coords = {}
 
-    if not lat_col1:
-        lat_col1 = next((c for c in df.columns if 'lat' in c.lower() or 'vĩ độ' in c.lower()), None)
-        lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or 'lon' in c.lower() or 'kinh độ' in c.lower()), None)
-
-    # Lọc tuyến cáp
-    df['POP'] = df['Tên đoạn cáp'].apply(lambda x: str(x).split('.')[0] if '.' in str(x) else str(x))
-    selected_pop = st.sidebar.selectbox("LỌC DỮ LIỆU POP", sorted(df['POP'].unique()), key="selected_pop")
-    
-    pop_df = df[df['POP'] == selected_pop].copy()
-    
-    # Dựng đồ thị kết nối & Lưu tọa độ các Node
-    G = nx.Graph()
-    node_coords = {}
-
-    for _, row in pop_df.iterrows():
-        k1 = str(row['Điểm KN1']).strip()
-        k2 = str(row['Điểm KN2']).strip()
-        cable = str(row['Tên đoạn cáp']).strip()
-        length = float(row['Chiều dài thực (m)']) if pd.notnull(row['Chiều dài thực (m)']) else 0.0
+if data_source == "File Excel (.xlsx)":
+    uploaded_file = st.sidebar.file_uploader("Tải lên file Excel", type=["xlsx", "xls"], key="excel_uploader")
+    if uploaded_file:
+        df = pd.read_excel(uploaded_file)
+        df.columns = [str(col).strip() for col in df.columns]
         
-        try:
-            if lat_col1 and lon_col1 and pd.notnull(row[lat_col1]) and pd.notnull(row[lon_col1]):
-                node_coords[k1] = (float(row[lat_col1]), float(row[lon_col1]))
-            if lat_col2 and lon_col2 and pd.notnull(row[lat_col2]) and pd.notnull(row[lon_col2]):
-                node_coords[k2] = (float(row[lat_col2]), float(row[lon_col2]))
-        except Exception:
-            pass
+        lat_col1 = next((c for c in df.columns if 'lat' in c.lower() and '1' in c.lower()), None)
+        lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or ('lon' in c.lower() and '1' in c.lower())), None)
+        lat_col2 = next((c for c in df.columns if 'lat' in c.lower() and '2' in c.lower()), None)
+        lon_col2 = next((c for c in df.columns if 'lng' in c.lower() or ('lon' in c.lower() and '2' in c.lower())), None)
 
-        G.add_edge(k1, k2, cable=cable, length=length)
+        if not lat_col1:
+            lat_col1 = next((c for c in df.columns if 'lat' in c.lower() or 'vĩ độ' in c.lower()), None)
+            lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or 'lon' in c.lower() or 'kinh độ' in c.lower()), None)
 
+        df['POP'] = df['Tên đoạn cáp'].apply(lambda x: str(x).split('.')[0] if '.' in str(x) else str(x))
+        selected_pop = st.sidebar.selectbox("LỌC DỮ LIỆU POP", sorted(df['POP'].unique()), key="selected_pop")
+        pop_df = df[df['POP'] == selected_pop].copy()
+
+        for _, row in pop_df.iterrows():
+            k1 = str(row['Điểm KN1']).strip()
+            k2 = str(row['Điểm KN2']).strip()
+            cable = str(row['Tên đoạn cáp']).strip()
+            length = float(row['Chiều dài thực (m)']) if pd.notnull(row['Chiều dài thực (m)']) else 0.0
+            
+            try:
+                if lat_col1 and lon_col1 and pd.notnull(row[lat_col1]) and pd.notnull(row[lon_col1]):
+                    node_coords[k1] = (float(row[lat_col1]), float(row[lon_col1]))
+                if lat_col2 and lon_col2 and pd.notnull(row[lat_col2]) and pd.notnull(row[lon_col2]):
+                    node_coords[k2] = (float(row[lat_col2]), float(row[lon_col2]))
+            except Exception:
+                pass
+
+            G.add_edge(k1, k2, cable=cable, length=length)
+
+else:
+    # Đọc File JSON
+    uploaded_file = st.sidebar.file_uploader("Tải lên file JSON", type=["json"], key="json_uploader")
+    if uploaded_file:
+        json_data = json.load(uploaded_file)
+        
+        # Gọi hàm bóc tách dữ liệu JSON
+        # (Nếu hàm parse_json_data đã định nghĩa ở trên)
+        G, node_coords = parse_json_data(json_data)
+
+# 3. Tính toán và Hiển thị
+if len(G.nodes()) > 0:
     st.sidebar.markdown("---")
     st.sidebar.subheader("📍 THÔNG TIN ĐO (OTDR)")
     
@@ -82,7 +84,6 @@ if uploaded_file:
     
     measured_len = st.sidebar.number_input("Chiều dài đo được (Mét)", min_value=0.0, value=170.0, step=10.0, key="measured_len")
 
-    # Khi bấm nút -> Tính toán và lưu vào session_state
     if st.sidebar.button("🎯 Xác định vị trí đứt", key="btn_calc"):
         if start_node and direction_node:
             current = start_node
@@ -128,11 +129,9 @@ if uploaded_file:
                     current = nxt
                     nxt = next_nodes[0]
 
-            # Lưu thông tin vào session_state
             st.session_state.break_result = b_res
             st.session_state.break_gps = b_gps
 
-    # Hiển thị kết quả từ session_state ở Sidebar
     if st.session_state.break_result:
         res = st.session_state.break_result
         st.sidebar.error("📍 VỊ TRÍ ĐỨT CÁP")
@@ -146,7 +145,7 @@ if uploaded_file:
             st.sidebar.markdown(f"📍 **GPS:** `{gps[0]:.6f}, {gps[1]:.6f}`")
             st.sidebar.markdown(f"👉 [**Mở trên Google Maps**]({gmap_url})")
 
-    # 3. Hiển thị Bản đồ (CHỈ HIỂN THỊ ĐOẠN CÁP BỊ ĐỨT)
+    # Bản đồ
     map_center = [21.0285, 105.8542]
     zoom_lvl = 12
 
@@ -160,13 +159,12 @@ if uploaded_file:
 
     m = folium.Map(location=map_center, zoom_start=zoom_lvl, tiles="OpenStreetMap")
 
-    # CHỈ VẼ ĐOẠN CÁP VÀ 2 ĐẦU NÚT KHI ĐÃ CÓ KẾT QUẢ XÁC ĐỊNH VỊ TRÍ
+    # CHỈ HIỂN THỊ ĐOẠN BỊ ĐỨT
     if st.session_state.break_result:
         u = st.session_state.break_result['from']
         v = st.session_state.break_result['to']
 
         if u in node_coords and v in node_coords:
-            # Vẽ đường cáp kết nối giữa 2 điểm u và v
             folium.PolyLine(
                 locations=[node_coords[u], node_coords[v]],
                 color="blue",
@@ -175,29 +173,16 @@ if uploaded_file:
                 tooltip=f"Đoạn cáp: {st.session_state.break_result['cable']}"
             ).add_to(m)
 
-            # Vẽ điểm nút đầu (Point From)
             folium.CircleMarker(
-                location=node_coords[u],
-                radius=6,
-                popup=f"Điểm KN: {u}",
-                tooltip=f"Điểm KN: {u}",
-                color="blue",
-                fill=True,
-                fill_color="white"
+                location=node_coords[u], radius=6, popup=f"Điểm KN: {u}", tooltip=f"Điểm KN: {u}",
+                color="blue", fill=True, fill_color="white"
             ).add_to(m)
 
-            # Vẽ điểm nút cuối (Point To)
             folium.CircleMarker(
-                location=node_coords[v],
-                radius=6,
-                popup=f"Điểm KN: {v}",
-                tooltip=f"Điểm KN: {v}",
-                color="blue",
-                fill=True,
-                fill_color="white"
+                location=node_coords[v], radius=6, popup=f"Điểm KN: {v}", tooltip=f"Điểm KN: {v}",
+                color="blue", fill=True, fill_color="white"
             ).add_to(m)
 
-        # Ghim vị trí đứt cáp màu đỏ
         if st.session_state.break_gps:
             folium.Marker(
                 location=st.session_state.break_gps,
@@ -209,4 +194,4 @@ if uploaded_file:
     st_folium(m, width=1000, height=650, key="folium_map")
 
 else:
-    st.info("👈 Vui lòng mở thanh điều khiển bên trái và tải file Excel lên để xem dữ liệu.")
+    st.info("👈 Vui lòng tải file Excel hoặc JSON lên để xem dữ liệu.")
