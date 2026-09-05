@@ -49,7 +49,7 @@ st.caption("Fiber Optic Break Location Finder - FPT Telecom System")
 df, file_name = load_server_data()
 
 if df is not None:
-    st.sidebar.success(f"📂 Đã tự động kết nối dữ liệu: `{file_name}`")
+    st.sidebar.success(f"📂 Đã tự động kết nối dữ liệu: ``")
     
     df.columns = [str(col).strip() for col in df.columns]
     
