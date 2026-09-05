@@ -6,7 +6,7 @@ import folium
 from streamlit_folium import st_folium
 
 # 1. Cấu hình trang Streamlit
-st.set_page_config(page_title="Xác Định Vị Trí Đứt Cáp", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Xác Định Vị Trí Đứt Cáp Make by BangNC13", layout="wide", initial_sidebar_state="expanded")
 
 # Khởi tạo session state lưu kết quả
 if "break_result" not in st.session_state:
