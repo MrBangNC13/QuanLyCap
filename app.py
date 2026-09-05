@@ -1,3 +1,10 @@
+@st.cache_data
+def load_data(file):
+    return pd.read_excel(file)
+
+if uploaded_file:
+    df = load_data(uploaded_file)
+
 import streamlit as st
 import pandas as pd
 import networkx as nx
