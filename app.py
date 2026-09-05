@@ -1,300 +1,254 @@
-import json
-import re
-import math
+import os
+import streamlit as st
 import pandas as pd
 import networkx as nx
 import folium
-import streamlit as st
 from streamlit_folium import st_folium
 
-# -----------------------------------------------------------------------------
-# 1. HÀM TÍNH KHOẢNG CÁCH GEODESIC (HAVERSINE) - ĐƠN VỊ: MÉT
-# -----------------------------------------------------------------------------
-def haversine_distance(coord1, coord2):
-    lat1, lon1 = coord1
-    lat2, lon2 = coord2
-    R = 6371000  # Bán kính Trái Đất (m)
+# 1. Cấu hình trang Streamlit
+st.set_page_config(page_title="Xác Định Vị Trí Đứt Cáp", layout="wide", initial_sidebar_state="expanded")
 
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
+# Khởi tạo session state lưu kết quả
+if "break_result" not in st.session_state:
+    st.session_state.break_result = None
+if "break_gps" not in st.session_state:
+    st.session_state.break_gps = None
 
-    a = math.sin(delta_phi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+# Hàm tự động tìm và đọc file Excel có sẵn trên Server
+@st.cache_data
+def load_server_data():
+    # Tìm các tên file Excel mặc định trên thư mục Server
+    possible_files = [
+        "Danh-Sách-Đoạn-Cáp.xlsx", 
+        "Danh_Sach_Doan_Cap.xlsx", 
+        "data.xlsx", 
+        "Danh-Sách-Đoạn-Cáp.xls"
+    ]
+    
+    selected_file = None
+    for f in possible_files:
+        if os.path.exists(f):
+            selected_file = f
+            break
 
-# -----------------------------------------------------------------------------
-# 2. PARSER BÓC TÁCH FILE TQGP001.JSON VÀ TỰ ĐỘNG CHUẨN HOÁ TUYẾN CÁP
-# -----------------------------------------------------------------------------
-def parse_json_data(data, max_connect_distance_m=1200):
+    # Nếu không tìm thấy các tên cố định, quét lấy file .xlsx đầu tiên
+    if not selected_file:
+        files = [f for f in os.listdir(".") if f.endswith(".xlsx") or f.endswith(".xls")]
+        if files:
+            selected_file = files[0]
+
+    if selected_file:
+        df = pd.read_excel(selected_file)
+        return df, selected_file
+    return None, None
+
+st.title("⚡ XÁC ĐỊNH VỊ TRÍ ĐỨT CÁP QUANG")
+st.caption("Fiber Optic Break Location Finder - FPT Telecom System")
+
+# 2. Tải Dữ Liệu Từ Server
+df, file_name = load_server_data()
+
+if df is not None:
+    st.sidebar.success(f"📂 Đã tự động kết nối dữ liệu: `{file_name}`")
+    
+    df.columns = [str(col).strip() for col in df.columns]
+    
+    # Tự động tìm các cột Tọa độ
+    lat_col1 = next((c for c in df.columns if 'lat' in c.lower() and '1' in c.lower()), None)
+    lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or ('lon' in c.lower() and '1' in c.lower())), None)
+    lat_col2 = next((c for c in df.columns if 'lat' in c.lower() and '2' in c.lower()), None)
+    lon_col2 = next((c for c in df.columns if 'lng' in c.lower() or ('lon' in c.lower() and '2' in c.lower())), None)
+
+    if not lat_col1:
+        lat_col1 = next((c for c in df.columns if 'lat' in c.lower() or 'vĩ độ' in c.lower()), None)
+        lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or 'lon' in c.lower() or 'kinh độ' in c.lower()), None)
+
+    # Lọc tuyến cáp theo POP
+    if 'Tên đoạn cáp' in df.columns:
+        df['POP'] = df['Tên đoạn cáp'].apply(lambda x: str(x).split('.')[0] if '.' in str(x) else str(x))
+        pop_list = sorted(df['POP'].unique())
+        selected_pop = st.sidebar.selectbox("LỌC DỮ LIỆU POP", pop_list, key="selected_pop")
+        pop_df = df[df['POP'] == selected_pop].copy()
+    else:
+        pop_df = df.copy()
+
+    # Dựng đồ thị kết nối & Lưu tọa độ các Node
     G = nx.Graph()
     node_coords = {}
 
-    if isinstance(data, (str, bytes)):
-        data = json.loads(data)
-
-    # Bóc tách lớp lồng nhau từ API FPT
-    if isinstance(data, dict) and "results" in data:
-        data = data["results"]
-    if isinstance(data, str):
+    for _, row in pop_df.iterrows():
+        k1 = str(row.get('Điểm KN1', '')).strip()
+        k2 = str(row.get('Điểm KN2', '')).strip()
+        cable = str(row.get('Tên đoạn cáp', f"{k1}-{k2}")).strip()
+        
+        len_val = row.get('Chiều dài thực (m)')
+        length = float(len_val) if pd.notnull(len_val) else 0.0
+        
         try:
-            data = json.loads(data.strip())
+            if lat_col1 and lon_col1 and pd.notnull(row[lat_col1]) and pd.notnull(row[lon_col1]):
+                node_coords[k1] = (float(row[lat_col1]), float(row[lon_col1]))
+            if lat_col2 and lon_col2 and pd.notnull(row[lat_col2]) and pd.notnull(row[lon_col2]):
+                node_coords[k2] = (float(row[lat_col2]), float(row[lon_col2]))
         except Exception:
             pass
-    if isinstance(data, dict) and "Table" in data:
-        table_content = data["Table"]
-        if isinstance(table_content, str):
-            try:
-                table_content = json.loads(table_content)
-            except Exception:
-                pass
-        data = table_content
-    if isinstance(data, dict) and "responseResult" in data:
-        data = data["responseResult"]
 
-    object_list = []
-    if isinstance(data, dict):
-        object_list = data.get("result", {}).get("objectInfo", []) or data.get("objectInfo", [])
-    elif isinstance(data, list):
-        object_list = data
+        if k1 and k2:
+            G.add_edge(k1, k2, cable=cable, length=length)
 
-    # 1. Trích xuất danh sách Trạm/Tủ/Tập điểm
-    for item in object_list:
-        if not isinstance(item, dict):
-            continue
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📍 THÔNG TIN ĐO (OTDR)")
+    
+    all_nodes = sorted(list(G.nodes()))
+    if all_nodes:
+        start_node = st.sidebar.selectbox("Điểm đo (Đang đứng)", all_nodes, key="start_node")
+        neighbors = list(G.neighbors(start_node)) if start_node in G else []
+        direction_node = st.sidebar.selectbox("Hướng đo (Xuôi ngọn / Về ODF)", neighbors, key="direction_node")
+        measured_len = st.sidebar.number_input("Chiều dài đo được (Mét)", min_value=0.0, value=170.0, step=10.0, key="measured_len")
 
-        node_id = str(item.get("name") or item.get("id") or "").strip()
-        lat_lng_str = str(item.get("latLng", "")).strip()
+        col_btn1, col_btn2 = st.sidebar.columns(2)
+        with col_btn1:
+            btn_calc = st.button("🎯 Xác định", type="primary", use_container_width=True)
+        with col_btn2:
+            btn_reset = st.button("🔄 Xóa", use_container_width=True)
 
-        if lat_lng_str and node_id:
-            coords = re.findall(r"[-+]?\d*\.\d+|\d+", lat_lng_str)
-            if len(coords) >= 2:
-                lat, lng = float(coords[0]), float(coords[1])
-                node_coords[node_id] = (lat, lng)
-                G.add_node(node_id, **item)
+        if btn_reset:
+            st.session_state.break_result = None
+            st.session_state.break_gps = None
+            st.rerun()
 
-    # 2. Xây dựng tuyến cáp theo thứ tự tự nhiên (tránh nối chéo)
-    node_keys = list(node_coords.keys())
-    for i in range(len(node_keys) - 1):
-        u, v = node_keys[i], node_keys[i+1]
-        dist = haversine_distance(node_coords[u], node_coords[v])
-        if dist <= max_connect_distance_m:
-            G.add_edge(u, v, cable=f"Tuyến {u} - {v}", length=round(dist, 2))
+        # Tính toán điểm đứt
+        if btn_calc and start_node and direction_node:
+            current = start_node
+            nxt = direction_node
+            accumulated = 0.0
+            visited = {current}
 
-    return G, node_coords
+            b_res = None
+            b_gps = None
 
-# -----------------------------------------------------------------------------
-# 3. THUẬT TOÁN TÌM ĐIỂM ĐỨT OTDR VÀ LIỆT KÊ CÁC ĐOẠN CÁP BỊ ẢNH HƯỞNG
-# -----------------------------------------------------------------------------
-def locate_otdr_break(G, node_coords, start_node, otdr_dist):
-    try:
-        lengths, paths = nx.single_source_dijkstra(G, start_node, weight="length")
-    except Exception:
-        return None, None, []
+            while True:
+                edge_data = G[current][nxt]
+                seg_len = edge_data['length']
+                cable_id = edge_data['cable']
+                visited.add(nxt)
 
-    affected_segments = []
-    break_coords = None
-    target_info = None
-
-    for end_node, path in paths.items():
-        if len(path) < 2:
-            continue
-        accumulated = 0.0
-        for i in range(len(path) - 1):
-            u, v = path[i], path[i + 1]
-            edge_len = G[u][v].get("length", 0.0)
-            
-            if accumulated <= otdr_dist <= (accumulated + edge_len):
-                offset = otdr_dist - accumulated
-                ratio = offset / edge_len if edge_len > 0 else 0
-                
-                if u in node_coords and v in node_coords:
-                    lat1, lon1 = node_coords[u]
-                    lat2, lon2 = node_coords[v]
-                    b_lat = lat1 + ratio * (lat2 - lat1)
-                    b_lon = lon1 + ratio * (lon2 - lon1)
-                    break_coords = (b_lat, b_lon)
-                    target_info = {
-                        "u": u, 
-                        "v": v, 
-                        "offset": round(offset, 2), 
-                        "edge_len": edge_len,
-                        "path": path
+                if accumulated + seg_len >= measured_len:
+                    d1 = measured_len - accumulated
+                    d2 = seg_len - d1
+                    b_res = {
+                        "cable": cable_id,
+                        "from": current,
+                        "to": nxt,
+                        "d1": d1,
+                        "d2": d2,
+                        "seg_len": seg_len,
+                        "total": measured_len
                     }
-                affected_segments.append({
-                    "from": u,
-                    "to": v,
-                    "length": edge_len,
-                    "cable": G[u][v].get("cable", "Tuyến cáp")
-                })
-                break
-            accumulated += edge_len
 
-    return break_coords, target_info, affected_segments
+                    if current in node_coords and nxt in node_coords and seg_len > 0:
+                        lat1, lon1 = node_coords[current]
+                        lat2, lon2 = node_coords[nxt]
+                        ratio = d1 / seg_len
+                        break_lat = lat1 + (lat2 - lat1) * ratio
+                        break_lon = lon1 + (lon2 - lon1) * ratio
+                        b_gps = (break_lat, break_lon)
+                    break
+                else:
+                    accumulated += seg_len
+                    next_nodes = [n for n in G.neighbors(nxt) if n not in visited]
+                    if not next_nodes:
+                        break
+                    current = nxt
+                    nxt = next_nodes[0]
 
+            st.session_state.break_result = b_res
+            st.session_state.break_gps = b_gps
 
-# -----------------------------------------------------------------------------
-# 4. MAIN APP - GIAO DIỆN FPT TELECOM "CHECK VỊ TRÍ SỰ CỐ"
-# -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Hệ thống Check vị trí sự cố cáp quang", 
-    page_icon="⚡", 
-    layout="wide"
-)
+    # Display Báo lỗi / Vị trí đứt ở Sidebar
+    if st.session_state.break_result:
+        res = st.session_state.break_result
+        st.sidebar.error("📍 VỊ TRÍ ĐỨT CÁP DỰ KIẾN")
+        st.sidebar.markdown(f"**Đoạn cáp:** `{res['cable']}`")
+        st.sidebar.markdown(f"• Cách **{res['from']}**: `{res['d1']:.1f}m` / {res['seg_len']}m")
+        st.sidebar.markdown(f"• Cách **{res['to']}**: `{res['d2']:.1f}m`")
+        
+        if st.session_state.break_gps:
+            gps = st.session_state.break_gps
+            gmap_url = f"https://www.google.com/maps?q={gps[0]},{gps[1]}"
+            st.sidebar.markdown(f"📍 **GPS:** `{gps[0]:.6f}, {gps[1]:.6f}`")
+            st.sidebar.markdown(f"👉 [**Mở trên Google Maps**]({gmap_url})")
 
-# Custom CSS cho chuẩn giao diện FPT
-st.markdown("""
-    <style>
-        .fpt-header {
-            background-color: #f37021;
-            padding: 15px 20px;
-            color: white;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .metric-card {
-            background-color: #ffffff;
-            border-left: 5px solid #f37021;
-            padding: 15px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            border-radius: 5px;
-            margin-bottom: 10px;
-        }
-        .danger-card {
-            background-color: #fff5f5;
-            border: 1px solid #feb2b2;
-            border-left: 5px solid #e53e3e;
-            padding: 15px;
-            border-radius: 5px;
-            color: #c53030;
-        }
-    </style>
-""", unsafe_allow_html=True)
+    # 3. Hiển thị Bản đồ
+    map_center = [21.0285, 105.8542]
+    zoom_lvl = 12
 
-st.markdown("""
-    <div class="fpt-header">
-        <h2 style="margin:0; padding:0;">⚡ HỆ THỐNG XÁC ĐỊNH VỊ TRÍ SỰ CỐ ĐỨT CÁP QUANG</h2>
-        <small>FPT Telecom Optical Cable Break Location Finder</small>
-    </div>
-""", unsafe_allow_html=True)
+    if st.session_state.break_gps:
+        map_center = st.session_state.break_gps
+        zoom_lvl = 17
+    elif len(node_coords) > 0:
+        first_coord = list(node_coords.values())[0]
+        map_center = [first_coord[0], first_coord[1]]
+        zoom_lvl = 15
 
-# Sidebar
-st.sidebar.title("⚙️ QUẢN LÝ DỮ LIỆU & CẤU HÌNH")
-file_type = st.sidebar.radio("Chọn định dạng file:", ("File JSON (.json)", "File Excel (.xlsx)"))
+    m = folium.Map(location=map_center, zoom_start=zoom_lvl, tiles="OpenStreetMap")
 
-uploaded_file = None
-if file_type == "File JSON (.json)":
-    uploaded_file = st.sidebar.file_uploader("Tải lên file JSON (TQGP001.json)", type=["json"])
-    max_dist = st.sidebar.slider("Khoảng cách ghép tuyến tối đa (mét):", 200, 3000, 1200, 100)
+    # Nếu ĐÃ TÍNH ĐƯỢC VỊ TRÍ ĐỨT -> Chỉ vẽ tuyến bị đứt
+    if st.session_state.break_result:
+        u = st.session_state.break_result['from']
+        v = st.session_state.break_result['to']
+
+        if u in node_coords and v in node_coords:
+            folium.PolyLine(
+                locations=[node_coords[u], node_coords[v]],
+                color="red",
+                weight=6,
+                opacity=0.9,
+                tooltip=f"Sự cố đoạn: {st.session_state.break_result['cable']}"
+            ).add_to(m)
+
+            for node in [u, v]:
+                folium.CircleMarker(
+                    location=node_coords[node],
+                    radius=7,
+                    popup=f"Điểm KN: {node}",
+                    tooltip=f"Điểm KN: {node}",
+                    color="blue",
+                    fill=True,
+                    fill_color="white"
+                ).add_to(m)
+
+        if st.session_state.break_gps:
+            folium.Marker(
+                location=st.session_state.break_gps,
+                popup=f"🚨 VỊ TRÍ ĐỨT CÁP: {st.session_state.break_result['cable']}",
+                tooltip="Vị trí đứt cáp",
+                icon=folium.Icon(color="red", icon="warning", prefix="fa")
+            ).add_to(m)
+
+    # Nếu CHƯA ĐO -> Hiển thị toàn bộ mạng cáp để quan sát tổng thể
+    else:
+        for u, v, data in G.edges(data=True):
+            if u in node_coords and v in node_coords:
+                folium.PolyLine(
+                    locations=[node_coords[u], node_coords[v]],
+                    color="#2b5c8f",
+                    weight=3,
+                    opacity=0.6,
+                    tooltip=f"Cáp: {data.get('cable', '')}"
+                ).add_to(m)
+
+        for node_id, coord in node_coords.items():
+            folium.CircleMarker(
+                location=coord,
+                radius=4,
+                popup=f"Điểm KN: {node_id}",
+                tooltip=node_id,
+                color="#2b5c8f",
+                fill=True,
+                fill_color="white"
+            ).add_to(m)
+
+    st_folium(m, width=1100, height=650, key="folium_map")
+
 else:
-    uploaded_file = st.sidebar.file_uploader("Tải lên file Excel", type=["xlsx", "xls"])
-    max_dist = 1200
-
-# Xử lý khi có file
-if uploaded_file is not None:
-    try:
-        G = nx.Graph()
-        node_coords = {}
-
-        if file_type == "File JSON (.json)":
-            content = uploaded_file.read()
-            raw_data = json.loads(content.decode("utf-8"))
-            G, node_coords = parse_json_data(raw_data, max_connect_distance_m=max_dist)
-        else:
-            df = pd.read_excel(uploaded_file)
-            for _, row in df.iterrows():
-                u = str(row.get("Điểm KN1", "")).strip()
-                v = str(row.get("Điểm KN2", "")).strip()
-                cable = str(row.get("Tên đoạn cáp", f"{u}-{v}")).strip()
-                length = float(row.get("Chiều dài thực (m)", 0.0))
-                lat1, lon1 = row.get("Lat1"), row.get("Lon1")
-                lat2, lon2 = row.get("Lat2"), row.get("Lon2")
-
-                if u and v: G.add_edge(u, v, cable=cable, length=length)
-                if lat1 and lon1: node_coords[u] = (float(lat1), float(lon1))
-                if lat2 and lon2: node_coords[v] = (float(lat2), float(lon2))
-
-        if len(G.nodes) > 0:
-            # Layout 2 Cột: Bên trái Nhập thông số OTDR, Bên phải hiển thị kết quả & Bản đồ
-            left_col, right_col = st.columns([1, 2])
-
-            with left_col:
-                st.subheader("🎯 Thông số đo OTDR")
-                node_list = sorted(list(G.nodes()))
-                start_node = st.selectbox("1. Chọn Trạm / Đầu đo OTDR:", node_list)
-                otdr_dist = st.number_input("2. Khoảng cách suy hao / đứt cáp (mét):", min_value=0.0, value=350.0, step=10.0)
-                
-                btn_calc = st.button("🚀 BẮT ĐẦU TÌM VỊ TRÍ", type="primary", use_container_width=True)
-
-                st.markdown("---")
-                st.markdown(f"**Tổng số Trạm/Nút:** `{len(G.nodes)}`")
-                st.markdown(f"**Tổng số Tuyến cáp:** `{len(G.edges)}`")
-
-            with right_col:
-                break_coords, target_info, affected_segments = None, None, []
-
-                if btn_calc and start_node:
-                    break_coords, target_info, affected_segments = locate_otdr_break(G, node_coords, start_node, otdr_dist)
-
-                # Hiển thị Card cảnh báo vị trí
-                if target_info and break_coords:
-                    st.markdown(f"""
-                        <div class="danger-card">
-                            <h3 style="margin-top:0;">📍 PHÁT HIỆN ĐIỂM SỰ CỐ</h3>
-                            <p><b>Trạm phát OTDR:</b> {start_node}</p>
-                            <p><b>Đoạn cáp nghi ngờ đứt:</b> Từ <b>{target_info['u']}</b> đến <b>{target_info['v']}</b></p>
-                            <p><b>Khoảng cách điểm đứt:</b> Cách <b>{target_info['u']}</b> đúng <b>{target_info['offset']}m</b> (Tổng đoạn: {target_info['edge_len']}m)</p>
-                            <p><b>Tọa độ GPS điểm đứt:</b> <code>{break_coords[0]:.6f}, {break_coords[1]:.6f}</code></p>
-                        </div>
-                    """, unsafe_allow_html=True)
-                elif btn_calc:
-                    st.warning("⚠️ Khoảng cách đo vượt quá phạm vi các tuyến cáp kết nối từ trạm này.")
-
-                # Render Bản đồ Folium
-                if node_coords:
-                    avg_lat = sum(lat for lat, lon in node_coords.values()) / len(node_coords)
-                    avg_lon = sum(lon for lat, lon in node_coords.values()) / len(node_coords)
-
-                    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=14)
-
-                    # Vẽ tuyến cáp
-                    for u, v, data in G.edges(data=True):
-                        if u in node_coords and v in node_coords:
-                            folium.PolyLine(
-                                locations=[node_coords[u], node_coords[v]],
-                                color="#1e88e5",
-                                weight=3,
-                                opacity=0.7,
-                                popup=f"Tuyến: {u} - {v}"
-                            ).add_to(m)
-
-                    # Marker Trạm
-                    for n_id, coord in node_coords.items():
-                        is_start = (n_id == start_node)
-                        folium.CircleMarker(
-                            location=coord,
-                            radius=6 if not is_start else 10,
-                            popup=f"Trạm/Nút: {n_id}",
-                            tooltip=n_id,
-                            color="green" if is_start else "#0d47a1",
-                            fill=True,
-                            fill_color="green" if is_start else "#0d47a1"
-                        ).add_to(m)
-
-                    # Marker Vị trí đứt cáp
-                    if break_coords:
-                        folium.Marker(
-                            location=break_coords,
-                            popup=f"🚨 ĐIỂM ĐỨT CÁP!\nCách {target_info['u']}: {target_info['offset']}m",
-                            tooltip="🚨 ĐIỂM SỰ CỐ ĐỨT CÁP",
-                            icon=folium.Icon(color="red", icon="warning-sign")
-                        ).add_to(m)
-                        m.location = list(break_coords)
-                        m.zoom_start = 16
-
-                    st_folium(m, width="100%", height=500)
-
-    except Exception as e:
-        st.error(f"❌ Có lỗi khi đọc dữ liệu: {str(e)}")
-else:
-    st.info("👉 Vui lòng tải file TQGP001.json hoặc Excel lên ở thanh menu bên trái để bắt đầu.")
+    st.error("❌ Không tìm thấy file Excel trên Server. Vui lòng kiểm tra lại tên file `Danh-Sách-Đoạn-Cáp.xlsx` trong thư mục chạy mã.")
