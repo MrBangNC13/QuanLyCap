@@ -22,7 +22,7 @@ st.title("⚡ XÁC ĐỊNH VỊ TRÍ ĐỨT CÁP")
 st.caption("Fiber Optic Break Location Finder")
 
 # 2. Sidebar Lọc & Nhập Dữ Liệu
-st.sidebar.title("📂 QUẢN LÝ DỮ LIỆU")
+st.sidebar.title("📂 Make by BangNC13")
 
 uploaded_file = st.sidebar.file_uploader(
     "Tải lên file Danh-Sách-Đoạn-Cáp.xlsx", 
