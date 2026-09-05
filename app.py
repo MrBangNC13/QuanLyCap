@@ -1,10 +1,3 @@
-@st.cache_data
-def load_data(file):
-    return pd.read_excel(file)
-
-if uploaded_file:
-    df = load_data(uploaded_file)
-
 import streamlit as st
 import pandas as pd
 import networkx as nx
@@ -14,24 +7,29 @@ from streamlit_folium import st_folium
 # 1. Cấu hình trang
 st.set_page_config(page_title="Xác Định Vị Trí Đứt Cáp", layout="wide", initial_sidebar_state="expanded")
 
+# Hàm đọc file Excel có Cache để chống tràn bộ nhớ RAM Streamlit Cloud
+@st.cache_data
+def load_data(file):
+    return pd.read_excel(file)
+
 st.title("⚡ XÁC ĐỊNH VỊ TRÍ ĐỨT CÁP")
 st.caption("Fiber Optic Break Location Finder")
 
 # 2. Sidebar Lọc & Nhập Dữ Liệu
-st.sidebar.title("📂 Tool xác định vị trí đứt cáp by BangNC13")
+st.sidebar.title("📂 QUẢN LÝ DỮ LIỆU")
 uploaded_file = st.sidebar.file_uploader("Tải lên file Danh-Sách-Đoạn-Cáp.xlsx", type=["xlsx", "xls"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
+    # Đọc dữ liệu qua hàm cache
+    df = load_data(uploaded_file)
     df.columns = [str(col).strip() for col in df.columns]
     
-    # Tìm cột Tọa độ (hỗ trợ nhiều tên gọi cột khác nhau)
+    # Tìm cột Tọa độ (hỗ trợ nhiều định dạng tên cột)
     lat_col1 = next((c for c in df.columns if 'lat' in c.lower() and '1' in c.lower()), None)
     lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or 'lon' in c.lower() and '1' in c.lower()), None)
     lat_col2 = next((c for c in df.columns if 'lat' in c.lower() and '2' in c.lower()), None)
     lon_col2 = next((c for c in df.columns if 'lng' in c.lower() or 'lon' in c.lower() and '2' in c.lower()), None)
 
-    # Nếu không chia 1 và 2 thì đọc cột Latitude/Longitude chung
     if not lat_col1:
         lat_col1 = next((c for c in df.columns if 'lat' in c.lower() or 'vĩ độ' in c.lower()), None)
         lon_col1 = next((c for c in df.columns if 'lng' in c.lower() or 'lon' in c.lower() or 'kinh độ' in c.lower()), None)
@@ -52,7 +50,6 @@ if uploaded_file:
         cable = str(row['Tên đoạn cáp']).strip()
         length = float(row['Chiều dài thực (m)']) if pd.notnull(row['Chiều dài thực (m)']) else 0.0
         
-        # Đọc tọa độ KN1 và KN2 nếu có
         try:
             if lat_col1 and lon_col1 and pd.notnull(row[lat_col1]) and pd.notnull(row[lon_col1]):
                 node_coords[k1] = (float(row[lat_col1]), float(row[lon_col1]))
@@ -104,7 +101,6 @@ if uploaded_file:
                     "total": measured_len
                 }
 
-                # Nội suy tọa độ GPS điểm đứt
                 if current in node_coords and nxt in node_coords and seg_len > 0:
                     lat1, lon1 = node_coords[current]
                     lat2, lon2 = node_coords[nxt]
@@ -132,7 +128,7 @@ if uploaded_file:
                 st.sidebar.markdown(f"📍 **GPS:** `{break_gps[0]:.6f}, {break_gps[1]:.6f}`")
                 st.sidebar.markdown(f"👉 [**Mở trên Google Maps**]({gmap_url})")
 
-    # 3. Hiển thị Bản đồ Trực quan
+    # 3. Hiển thị Bản đồ
     map_center = [21.0285, 105.8542]
     zoom_lvl = 12
 
@@ -146,7 +142,6 @@ if uploaded_file:
 
     m = folium.Map(location=map_center, zoom_start=zoom_lvl, tiles="OpenStreetMap")
 
-    # Vẽ tuyến đường cáp
     for u, v in G.edges():
         if u in node_coords and v in node_coords:
             folium.PolyLine(
@@ -156,7 +151,6 @@ if uploaded_file:
                 opacity=0.7
             ).add_to(m)
 
-    # Ghim các điểm KN
     for node_name, coord in node_coords.items():
         folium.CircleMarker(
             location=coord,
@@ -167,7 +161,6 @@ if uploaded_file:
             fill_color="white"
         ).add_to(m)
 
-    # Ghim điểm đứt cáp (Màu đỏ)
     if break_gps:
         folium.Marker(
             location=break_gps,
