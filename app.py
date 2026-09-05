@@ -4,7 +4,81 @@ import networkx as nx
 import folium
 import json
 from streamlit_folium import st_folium
+import json
+import pandas as pd
+import networkx as nx
+import folium
+import streamlit as st
+from streamlit_folium import st_folium
 
+# --- KHAI BÁO HÀM DƯỚI ĐÂY (TRƯỚC DÒNG CALL NÓ) ---
+def parse_json_data(data):
+    G = nx.Graph()
+    node_coords = {}
+
+    # Chuyển đổi dữ liệu nếu đầu vào là chuỗi / bytes
+    if isinstance(data, (str, bytes)):
+        data = json.loads(data)
+
+    # 1. Trường hợp JSON dạng Nodes / Links
+    if isinstance(data, dict) and ("nodes" in data or "links" in data):
+        for node in data.get("nodes", []):
+            node_id = str(node.get("id") or node.get("name")).strip()
+            lat = node.get("lat") or node.get("latitude")
+            lon = node.get("lng") or node.get("lon") or node.get("longitude")
+            if lat is not None and lon is not None:
+                node_coords[node_id] = (float(lat), float(lon))
+                G.add_node(node_id)
+
+        for link in data.get("links", []) or data.get("edges", []):
+            u = str(link.get("from") or link.get("source")).strip()
+            v = str(link.get("to") or link.get("target")).strip()
+            cable_id = str(link.get("cable_name") or link.get("cable") or f"{u}-{v}").strip()
+            length = float(link.get("length", 0.0))
+            G.add_edge(u, v, cable=cable_id, length=length)
+
+    # 2. Trường hợp JSON dạng GeoJSON
+    elif isinstance(data, dict) and data.get("type") == "FeatureCollection":
+        for feature in data.get("features", []):
+            geom_type = feature.get("geometry", {}).get("type")
+            coords = feature.get("geometry", {}).get("coordinates")
+            props = feature.get("properties", {})
+
+            if geom_type == "Point":
+                node_id = str(props.get("name") or props.get("id")).strip()
+                lon, lat = coords[0], coords[1]
+                node_coords[node_id] = (float(lat), float(lon))
+                G.add_node(node_id)
+
+            elif geom_type == "LineString":
+                u = str(props.get("from")).strip()
+                v = str(props.get("to")).strip()
+                cable_id = str(props.get("cable_name") or props.get("name") or f"{u}-{v}").strip()
+                length = float(props.get("length", 0.0))
+                G.add_edge(u, v, cable=cable_id, length=length)
+
+    # 3. Trường hợp JSON dạng danh sách (List of objects)
+    elif isinstance(data, list):
+        for item in data:
+            u = str(item.get("Điểm KN1") or item.get("from") or item.get("source")).strip()
+            v = str(item.get("Điểm KN2") or item.get("to") or item.get("target")).strip()
+            cable_id = str(item.get("Tên đoạn cáp") or item.get("cable_name") or f"{u}-{v}").strip()
+            length = float(item.get("Chiều dài thực (m)") or item.get("length", 0.0))
+
+            lat1 = item.get("lat1") or item.get("lat_1")
+            lon1 = item.get("lng1") or item.get("lon_1")
+            lat2 = item.get("lat2") or item.get("lat_2")
+            lon2 = item.get("lng2") or item.get("lon_2")
+
+            if lat1 and lon1:
+                node_coords[u] = (float(lat1), float(lon1))
+            if lat2 and lon2:
+                node_coords[v] = (float(lat2), float(lon2))
+
+            if u and v:
+                G.add_edge(u, v, cable=cable_id, length=length)
+
+    return G, node_coords
 # 1. Cấu hình trang
 st.set_page_config(page_title="Xác Định Vị Trí Đứt Cáp", layout="wide", initial_sidebar_state="expanded")
 
